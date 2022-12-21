@@ -1,0 +1,53 @@
+version: '3.5'
+
+networks:
+  prefect:
+    name: prefect
+
+services:
+  # --------------------------------------#
+  #             Prefect Server            #
+  # --------------------------------------#
+  prefect-server:
+    image: ${PREFECT_SERVER_IMAGE}
+    command:
+      - prefect
+      - orion
+      - start
+    ports:
+      - 4200:4200
+    volumes:
+      - ${PWD}/volumes/prefect:/root/.prefect
+      - ${PWD}/volumes/prefect_files:/prefect_files
+      - ${PWD}/flows:/flows
+    environment:
+      PREFECT_ORION_API_HOST: 0.0.0.0
+      PREFECT_ORION_ANALYTICS_ENABLED: "false"
+      PREFECT_LOGGING_SERVER_LEVEL: WARNING
+      PREFECT_API_URL: http://prefect-server:4200/api
+    networks:
+      - prefect
+  # --------------------------------------#
+  #             Docker Agent              #
+  # --------------------------------------#
+  prefect-agent:
+    image: ${PREFECT_AGENT_IMAGE}
+    command:
+      - prefect
+      - agent
+      - start
+      - -q
+      - default
+    depends_on:
+      prefect-server:
+        condition: service_started
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_LOGGING_LEVEL: DEBUG
+      DOCKER_HOST: unix://var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PWD}/volumes/prefect_files:/prefect_files
+      - ${PWD}/volumes/flows_files:/files
+    networks:
+      - prefect
