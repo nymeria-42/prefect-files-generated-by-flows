@@ -1,53 +1,94 @@
-version: '3.5'
-
-networks:
-  prefect:
-    name: prefect
-
+version: "3.9"
 services:
-  # --------------------------------------#
-  #             Prefect Server            #
-  # --------------------------------------#
-  prefect-server:
-    image: ${PREFECT_SERVER_IMAGE}
-    command:
-      - prefect
-      - orion
-      - start
+
+  ### Prefect Database
+  database:
+    image: postgres:15.1-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=orion
+    expose:
+      - 5432
+    volumes: 
+      - db:/var/lib/postgresql/data
+    profiles: ["orion"]
+
+  ### MinIO for flow storage
+  minio:
+    image: minio/minio:latest
+    entrypoint: ["minio", "server", "--address", "0.0.0.0:9000", "--console-address", "0.0.0.0:9001", "/data"]
+    volumes:
+      - minio:/data
     ports:
-      - 4200:4200
+      - 9000:9000
+      - 9001:9001
+    profiles: ["minio"]
+
+  ### Prefect Orion API
+  orion:
+    image: prefect-python
+    restart: always
+    privileged: true
     volumes:
-      - ${PWD}/volumes/prefect:/root/.prefect
-      - ${PWD}/volumes/prefect_files:/prefect_files
-      - ${PWD}/flows:/flows
+      - files:/files
+      - prefect:/root/.prefect
+    entrypoint: ["prefect", "orion", "start", "--host", "0.0.0.0"]
     environment:
-      PREFECT_ORION_API_HOST: 0.0.0.0
-      PREFECT_ORION_ANALYTICS_ENABLED: "false"
-      PREFECT_LOGGING_SERVER_LEVEL: WARNING
-      PREFECT_API_URL: http://prefect-server:4200/api
-    networks:
-      - prefect
-  # --------------------------------------#
-  #             Docker Agent              #
-  # --------------------------------------#
-  prefect-agent:
-    image: ${PREFECT_AGENT_IMAGE}
-    command:
-      - prefect
-      - agent
-      - start
-      - -q
-      - default
+      - PREFECT_ORION_API_HOST=127.0.0.1
+      - PREFECT_ORION_API_PORT=42000
+      - PREFECT_ORION_DATABASE_CONNECTION_URL=postgresql+asyncpg://postgres:postgres@database:5432/orion
+      - PREFECT_ORION_UI_API_URL=http://localhost:42000/api
     depends_on:
-      prefect-server:
-        condition: service_started
-    environment:
-      PREFECT_API_URL: http://prefect-server:4200/api
-      PREFECT_LOGGING_LEVEL: DEBUG
-      DOCKER_HOST: unix://var/run/docker.sock
+      - database
+    ports:
+      - 42000:42000
+    profiles: ["orion"]
+
+  ## Prefect Agent
+  agent:
+    image: prefect-python-agent:1.0
+    restart: always
+    privileged: true
+    entrypoint: ["prefect", "agent", "start", "-q", "agencias"]
+    cmd:
+    - cd path/to/flow
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${PWD}/volumes/prefect_files:/prefect_files
-      - ${PWD}/volumes/flows_files:/files
-    networks:
-      - prefect
+      - path/to/save/files:/files
+    environment:
+      - PREFECT_API_URL=http://localhost:42000/api
+    profiles: ["agent"]
+
+
+  agent2:
+    image: prefect-python-agent:1.0
+    restart: "no"
+    privileged: true
+    command: bash -c "virtualenv venv --python=2.7 && prefect agent start -q default"
+    environment:
+      - PREFECT_API_URL=http://localhost:42000/api
+    profiles: ["agent"]
+
+  ### Prefect CLI
+  cli:
+    image: prefect-python-agent:1.0
+    entrypoint: "bash"
+    working_dir: "/root/flows"
+    volumes:
+      - "./flows:/root/flows"
+    environment:
+      - PREFECT_API_URL=http://localhost:42000/api
+    privileged: true
+    profiles: ["cli"]
+
+volumes:
+    prefect:
+    minio:
+    db:
+    files:
+      
+networks:
+  default:
+    name: prefect-network
+
